@@ -82,27 +82,20 @@ def ensure_self_ignored():
     with open(IGNORE_FILE, "r", encoding="utf-8") as f:
         content = f.read()
 
-    changed = False
-
-    # 忽略自身
     if SELF_FILENAME not in content:
         with open(IGNORE_FILE, "a", encoding="utf-8") as f:
             f.write(f"\n# 本地工具，不提交\n{SELF_FILENAME}\n")
-        changed = True
 
-    # 忽略配置文件
     if CONFIG_FILE not in content:
         with open(IGNORE_FILE, "a", encoding="utf-8") as f:
             f.write(f"# 本地配置文件（含路径信息）\n{CONFIG_FILE}\n")
-        changed = True
 
-    # 忽略日志和备份目录（如果还没忽略）
     if f"{LOGS_DIR}/" not in content:
         with open(IGNORE_FILE, "a", encoding="utf-8") as f:
             f.write(f"# 日志和备份目录\n{LOGS_DIR}/\n{BACKUP_DIR}/\n")
-        changed = True
 
     return True
+
 
 def get_current_time_str():
     return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -197,7 +190,7 @@ class GitCommitGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("📦 Git 提交助手 · 完整版")
-        self.geometry("960x860")
+        self.geometry("960x900")
         self.resizable(True, True)
 
         self.recent_repos = load_recent_repos()
@@ -205,6 +198,7 @@ class GitCommitGUI(ctk.CTk):
         self.commit_msg = ctk.StringVar()
         self.tag_name = ctk.StringVar()
         self.tag_msg = ctk.StringVar()
+        self.remote_url = ctk.StringVar(value="")  # 新增：远程地址
         self.files_var = {}
         self.loading = False
 
@@ -223,9 +217,9 @@ class GitCommitGUI(ctk.CTk):
             font=ctk.CTkFont(size=20, weight="bold")
         ).pack(anchor="w", pady=(0, 10))
 
-        # 路径行
+        # ----- 行1：仓库路径 -----
         path_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        path_frame.pack(fill="x", pady=5)
+        path_frame.pack(fill="x", pady=3)
 
         ctk.CTkLabel(path_frame, text="仓库路径：", font=ctk.CTkFont(size=13)).pack(side="left")
         ctk.CTkEntry(
@@ -245,7 +239,25 @@ class GitCommitGUI(ctk.CTk):
         ctk.CTkButton(path_frame, text="🔄 刷新", command=self.refresh_status, width=70, height=32,
                       fg_color="#2e8b57", hover_color="#3cb371").pack(side="left")
 
-        # 状态标签
+        # ----- 行2：远程地址（新增） -----
+        remote_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        remote_frame.pack(fill="x", pady=3)
+
+        ctk.CTkLabel(remote_frame, text="远程地址：", font=ctk.CTkFont(size=13)).pack(side="left")
+        ctk.CTkEntry(
+            remote_frame,
+            textvariable=self.remote_url,
+            placeholder_text="https://github.com/用户名/仓库名.git",
+            height=32
+        ).pack(side="left", fill="x", expand=True, padx=(10, 8))
+
+        ctk.CTkButton(remote_frame, text="🔗 设置远程", command=self.set_remote, width=90, height=32,
+                      fg_color="#fd7e14", hover_color="#e06b0a").pack(side="left", padx=(0, 5))
+
+        ctk.CTkButton(remote_frame, text="🚀 推送 (首次)", command=self.push_first_time, width=100, height=32,
+                      fg_color="#28a745", hover_color="#218838").pack(side="left", padx=(0, 5))
+
+        # ----- 行3：分支/标签状态 -----
         status_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
         status_frame.pack(fill="x", pady=(5, 0))
         self.branch_label = ctk.CTkLabel(status_frame, text="🌿 分支: --", font=ctk.CTkFont(size=12))
@@ -255,7 +267,7 @@ class GitCommitGUI(ctk.CTk):
         self.remote_label = ctk.CTkLabel(status_frame, text="📡 远程: --", font=ctk.CTkFont(size=12))
         self.remote_label.pack(side="left")
 
-        # 文件列表
+        # ----- 文件列表 -----
         list_frame = ctk.CTkFrame(main_frame)
         list_frame.pack(fill="both", expand=True, pady=(10, 5))
 
@@ -284,7 +296,7 @@ class GitCommitGUI(ctk.CTk):
         )
         self.canvas.bind_all("<MouseWheel>", lambda e: self.canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
 
-        # 操作区
+        # ----- 操作区 -----
         action_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
         action_frame.pack(fill="x", pady=(8, 0))
 
@@ -308,8 +320,6 @@ class GitCommitGUI(ctk.CTk):
                       fg_color="#6f42c1").pack(side="left", padx=(0, 6))
         ctk.CTkButton(btn_row1, text="📡 远程信息", command=self.show_remote_info, height=32,
                       fg_color="#17a2b8").pack(side="left", padx=(0, 6))
-        ctk.CTkButton(btn_row1, text="🔧 远程管理", command=self.manage_remotes, height=32,
-                      fg_color="#fd7e14").pack(side="left", padx=(0, 6))
         ctk.CTkButton(btn_row1, text="⏹ 取消暂存", command=self.unstage_selected, height=32,
                       fg_color="#d45a5a").pack(side="left", padx=(0, 6))
         ctk.CTkButton(btn_row1, text="📋 复制状态", command=self.copy_status, height=32,
@@ -372,6 +382,7 @@ class GitCommitGUI(ctk.CTk):
                     self.repo_path.set(repo)
                     self.log(f"📂 自动加载最近仓库: {repo}")
                     self.refresh_status()
+                    self.load_remote_info()
                     return
         self.show_repo_chooser()
 
@@ -419,6 +430,7 @@ class GitCommitGUI(ctk.CTk):
                 if os.path.exists(os.path.join(path, ".git")):
                     self.log(f"📂 已选择仓库: {path}")
                     self.refresh_status()
+                    self.load_remote_info()
                 else:
                     if messagebox.askyesno("初始化 Git", f"目录 {path} 不是 Git 仓库，是否执行 `git init` 初始化？"):
                         self.init_repo()
@@ -437,6 +449,7 @@ class GitCommitGUI(ctk.CTk):
             if os.path.exists(os.path.join(current, ".git")):
                 self.log(f"📂 使用当前目录: {current}")
                 self.refresh_status()
+                self.load_remote_info()
             else:
                 self.status_label.configure(text="非 Git 仓库，部分功能不可用")
                 self.log(f"📂 当前目录: {current}（非 Git 仓库）")
@@ -451,6 +464,7 @@ class GitCommitGUI(ctk.CTk):
         self.log(f"📂 切换至最近仓库: {repo}")
         if os.path.exists(os.path.join(repo, ".git")):
             self.refresh_status()
+            self.load_remote_info()
         else:
             self.status_label.configure(text="目录已损坏或非 Git 仓库")
             if messagebox.askyesno("初始化 Git", f"目录 {repo} 不是 Git 仓库，是否初始化？"):
@@ -487,6 +501,7 @@ class GitCommitGUI(ctk.CTk):
         self.log(f"📂 切换至: {repo}")
         if os.path.exists(os.path.join(repo, ".git")):
             self.refresh_status()
+            self.load_remote_info()
         else:
             self.status_label.configure(text="非 Git 仓库")
             if messagebox.askyesno("初始化 Git", f"目录 {repo} 不是 Git 仓库，是否初始化？"):
@@ -500,12 +515,96 @@ class GitCommitGUI(ctk.CTk):
             if os.path.exists(os.path.join(path, ".git")):
                 self.log(f"📂 已选择仓库: {path}")
                 self.refresh_status()
+                self.load_remote_info()
             else:
                 if messagebox.askyesno("初始化 Git", f"目录 {path} 不是 Git 仓库，是否执行 `git init` 初始化？"):
                     self.init_repo()
                 else:
                     self.status_label.configure(text="非 Git 仓库，部分功能不可用")
                     self.log(f"📂 已选择目录: {path}（非 Git 仓库）")
+
+    # ---------- 远程地址管理（新增） ----------
+    def load_remote_info(self):
+        """加载当前远程地址并显示在输入框中"""
+        repo = self.repo_path.get()
+        if not repo:
+            return
+        out, _, code = run_git(["remote", "-v"], cwd=repo)
+        if code == 0 and out:
+            for line in out.splitlines():
+                if "(fetch)" in line:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        self.remote_url.set(parts[1])
+                        self.remote_label.configure(text=f"📡 远程: {parts[1][:40]}...")
+                        return
+        self.remote_url.set("")
+        self.remote_label.configure(text="📡 远程: 无")
+
+    def set_remote(self):
+        """设置远程仓库地址（origin）"""
+        repo = self.repo_path.get()
+        url = self.remote_url.get().strip()
+        if not repo:
+            messagebox.showwarning("提示", "请先选择仓库目录")
+            return
+        if not url:
+            messagebox.showwarning("提示", "请输入远程仓库地址")
+            return
+
+        # 检查是否已有 origin
+        out, _, _ = run_git(["remote", "get-url", "origin"], cwd=repo)
+        if out:
+            # 已存在，询问是否修改
+            if not messagebox.askyesno("确认修改", f"已存在远程仓库 origin，是否替换为 {url}？"):
+                return
+            # 删除旧的 origin
+            run_git(["remote", "remove", "origin"], cwd=repo)
+
+        out, err, code = run_git(["remote", "add", "origin", url], cwd=repo)
+        if code == 0:
+            self.log(f"✅ 远程仓库 origin 已设置为: {url}")
+            self.remote_label.configure(text=f"📡 远程: {url[:40]}...")
+            # 更新远程信息
+            self.update_remote_info()
+        else:
+            self.log(f"❌ 设置远程失败：{err}")
+            messagebox.showerror("错误", f"设置远程失败：{err}")
+
+    def push_first_time(self):
+        """首次推送：git push -u origin main"""
+        repo = self.repo_path.get()
+        if not repo:
+            messagebox.showwarning("提示", "请先选择仓库目录")
+            return
+
+        # 检查是否有远程仓库
+        out, _, _ = run_git(["remote", "-v"], cwd=repo)
+        if not out:
+            # 没有远程，先让用户设置
+            messagebox.showwarning("提示", "请先在“远程地址”输入框中设置远程仓库地址，再点击推送")
+            return
+
+        self.log("🚀 准备首次推送...")
+        self.status_label.configure(text="正在首次推送...")
+        self.update_idletasks()
+
+        def task():
+            # 确保分支名正确
+            branch_out, _, _ = run_git(["branch", "--show-current"], cwd=repo)
+            branch = branch_out or "main"
+
+            # 执行首次推送
+            out, err, code = run_git(["push", "-u", "origin", branch], cwd=repo)
+            if code == 0:
+                self.after(0, lambda: self.log(f"✅ 首次推送成功！分支: {branch}"))
+                self.after(0, lambda: self.status_label.configure(text="首次推送完成"))
+            else:
+                self.after(0, lambda: self.log(f"❌ 首次推送失败：{err}"))
+                self.after(0, lambda: self.status_label.configure(text="首次推送失败"))
+                self.after(0, lambda: messagebox.showerror("错误", f"首次推送失败：{err}"))
+
+        threading.Thread(target=task, daemon=True).start()
 
     # ---------- Git 操作 ----------
     def init_repo(self):
@@ -593,8 +692,10 @@ class GitCommitGUI(ctk.CTk):
             if lines:
                 match = re.search(r"(\S+)\s+\(fetch\)", lines[0])
                 if match:
+                    self.remote_url.set(match.group(1))
                     self.remote_label.configure(text=f"📡 远程: {match.group(1)[:40]}...")
                     return
+        self.remote_url.set("")
         self.remote_label.configure(text="📡 远程: 无")
 
     # ---------- 文件列表 ----------
@@ -753,191 +854,6 @@ class GitCommitGUI(ctk.CTk):
         msg += f"⬇️ 本地领先远程的提交:\n{out_diff2 if out_diff2 else '  无'}"
         messagebox.showinfo("远程信息", msg)
         self.log("✅ 远程信息已显示")
-
-    # ---------- 远程管理（新增） ----------
-    def manage_remotes(self):
-        repo = self.repo_path.get()
-        if not repo:
-            messagebox.showwarning("提示", "请先选择仓库目录")
-            return
-
-        # 获取当前远程列表
-        out, _, _ = run_git(["remote", "-v"], cwd=repo)
-        remotes = {}
-        if out:
-            for line in out.splitlines():
-                parts = line.split()
-                if len(parts) >= 3:
-                    name = parts[0]
-                    url = parts[1]
-                    remotes.setdefault(name, []).append(url)
-
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("🔧 远程仓库管理")
-        dialog.geometry("600x450")
-        dialog.resizable(True, True)
-        dialog.transient(self)
-        dialog.grab_set()
-
-        frame = ctk.CTkFrame(dialog, fg_color="transparent")
-        frame.pack(pady=15, padx=20, fill="both", expand=True)
-
-        ctk.CTkLabel(frame, text="远程仓库管理", font=ctk.CTkFont(size=18, weight="bold")).pack(anchor="w", pady=(0, 10))
-
-        # 列表区域
-        list_frame = ctk.CTkFrame(frame)
-        list_frame.pack(fill="both", expand=True, pady=5)
-
-        header = ctk.CTkFrame(list_frame, fg_color="transparent")
-        header.pack(fill="x", padx=5, pady=(5, 0))
-        ctk.CTkLabel(header, text="远程名", width=100, font=ctk.CTkFont(weight="bold")).pack(side="left", padx=5)
-        ctk.CTkLabel(header, text="URL", anchor="w", font=ctk.CTkFont(weight="bold")).pack(side="left", fill="x", expand=True)
-
-        scroll_frame = ctk.CTkFrame(list_frame)
-        scroll_frame.pack(fill="both", expand=True, padx=2, pady=2)
-
-        canvas = tk.Canvas(scroll_frame, highlightthickness=0)
-        scrollbar = ctk.CTkScrollbar(scroll_frame, orientation="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        inner_frame = ctk.CTkFrame(canvas, fg_color="transparent")
-        canvas.create_window((0, 0), window=inner_frame, anchor="nw")
-
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-
-        inner_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-
-        if remotes:
-            for name, urls in remotes.items():
-                for url in urls:
-                    row = ctk.CTkFrame(inner_frame, fg_color="transparent")
-                    row.pack(fill="x", padx=5, pady=2)
-                    ctk.CTkLabel(row, text=name, width=100).pack(side="left", padx=5)
-                    ctk.CTkLabel(row, text=url, anchor="w").pack(side="left", fill="x", expand=True, padx=5)
-        else:
-            ctk.CTkLabel(inner_frame, text="（无远程仓库）", text_color="gray").pack(pady=20)
-
-        # 添加远程
-        add_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        add_frame.pack(fill="x", pady=(10, 5))
-        ctk.CTkLabel(add_frame, text="添加远程：").pack(side="left")
-        new_name = ctk.CTkEntry(add_frame, placeholder_text="名称 (如 origin)", width=120)
-        new_name.pack(side="left", padx=5)
-        new_url = ctk.CTkEntry(add_frame, placeholder_text="URL", width=250)
-        new_url.pack(side="left", padx=5)
-
-        def add_remote():
-            name = new_name.get().strip()
-            url = new_url.get().strip()
-            if not name or not url:
-                messagebox.showwarning("提示", "请填写名称和URL")
-                return
-            out, err, code = run_git(["remote", "add", name, url], cwd=repo)
-            if code == 0:
-                self.log(f"✅ 远程仓库 {name} 添加成功")
-                dialog.destroy()
-                self.manage_remotes()
-                self.update_remote_info()
-            else:
-                messagebox.showerror("错误", f"添加失败：{err}")
-
-        ctk.CTkButton(add_frame, text="添加", command=add_remote, height=28,
-                      fg_color="#28a745").pack(side="left", padx=5)
-
-        # 修改 / 删除按钮
-        btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        btn_frame.pack(fill="x", pady=(5, 0))
-
-        def edit_remote():
-            names = list(remotes.keys())
-            if not names:
-                messagebox.showinfo("提示", "没有远程仓库可修改")
-                return
-            edit_dialog = ctk.CTkToplevel(self)
-            edit_dialog.title("修改远程仓库")
-            edit_dialog.geometry("400x220")
-            edit_dialog.transient(dialog)
-            edit_dialog.grab_set()
-
-            f = ctk.CTkFrame(edit_dialog, fg_color="transparent")
-            f.pack(pady=20, padx=20, fill="both", expand=True)
-
-            ctk.CTkLabel(f, text="选择远程名：").pack(anchor="w")
-            name_var = ctk.StringVar(value=names[0] if names else "")
-            ctk.CTkOptionMenu(f, values=names, variable=name_var).pack(fill="x", pady=5)
-
-            ctk.CTkLabel(f, text="新 URL：").pack(anchor="w")
-            url_entry = ctk.CTkEntry(f, placeholder_text="输入新的 URL")
-            url_entry.pack(fill="x", pady=5)
-
-            def do_edit():
-                n = name_var.get()
-                u = url_entry.get().strip()
-                if not u:
-                    messagebox.showwarning("提示", "请输入新 URL")
-                    return
-                old_url = remotes.get(n, [""])[0] if n in remotes else ""
-                code1 = run_git(["remote", "remove", n], cwd=repo)[2]
-                if code1 != 0:
-                    messagebox.showerror("错误", "删除旧远程失败")
-                    return
-                code2 = run_git(["remote", "add", n, u], cwd=repo)[2]
-                if code2 == 0:
-                    self.log(f"✅ 远程仓库 {n} 已更新为 {u}")
-                    edit_dialog.destroy()
-                    dialog.destroy()
-                    self.manage_remotes()
-                    self.update_remote_info()
-                else:
-                    messagebox.showerror("错误", "添加新远程失败")
-                    if old_url:
-                        run_git(["remote", "add", n, old_url], cwd=repo)
-
-            ctk.CTkButton(f, text="确认修改", command=do_edit).pack(pady=10)
-
-        def delete_remote():
-            names = list(remotes.keys())
-            if not names:
-                messagebox.showinfo("提示", "没有远程仓库可删除")
-                return
-            del_dialog = ctk.CTkToplevel(self)
-            del_dialog.title("删除远程仓库")
-            del_dialog.geometry("300x150")
-            del_dialog.transient(dialog)
-            del_dialog.grab_set()
-
-            f = ctk.CTkFrame(del_dialog, fg_color="transparent")
-            f.pack(pady=20, padx=20, fill="both", expand=True)
-
-            ctk.CTkLabel(f, text="选择要删除的远程名：").pack(anchor="w")
-            name_var = ctk.StringVar(value=names[0] if names else "")
-            ctk.CTkOptionMenu(f, values=names, variable=name_var).pack(fill="x", pady=5)
-
-            def do_delete():
-                n = name_var.get()
-                if not n:
-                    return
-                if messagebox.askyesno("确认删除", f"确定要删除远程仓库 '{n}' 吗？"):
-                    code = run_git(["remote", "remove", n], cwd=repo)[2]
-                    if code == 0:
-                        self.log(f"✅ 远程仓库 {n} 已删除")
-                        del_dialog.destroy()
-                        dialog.destroy()
-                        self.manage_remotes()
-                        self.update_remote_info()
-                    else:
-                        messagebox.showerror("错误", "删除失败")
-
-            ctk.CTkButton(f, text="确认删除", command=do_delete, fg_color="#dc3545").pack(pady=10)
-
-        ctk.CTkButton(btn_frame, text="✏️ 修改", command=edit_remote, height=28,
-                      fg_color="#fd7e14").pack(side="left", padx=(0, 10))
-        ctk.CTkButton(btn_frame, text="🗑️ 删除", command=delete_remote, height=28,
-                      fg_color="#dc3545").pack(side="left")
-
-        ctk.CTkButton(frame, text="关闭", command=dialog.destroy, height=30, width=80,
-                      fg_color="#6c757d").pack(pady=(15, 0))
 
     # ---------- 标签管理 ----------
     def load_tags(self):
